@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Indoor Map Creator</title>
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .map-canvas {
+            touch-action: none;
+            background: #f8f9fa;
+            border: 2px dashed #ccc;
+        }
+        .draggable {
+            cursor: move;
+            user-select: none;
+        }
+        .loading {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .element-toolbar {
+            backdrop-filter: blur(8px);
+            background-color: rgba(255, 255, 255, 0.9);
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="min-h-screen">
+        <!-- Header -->
+        <header class="bg-white shadow-sm">
+            <div class="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
+                <h1 class="text-2xl font-bold text-gray-800">Indoor Map Creator</h1>
+                <div class="space-x-4">
+                    <button onclick="saveMap()" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                        <i class="bi bi-save me-2"></i>Save
+                    </button>
+                    <button onclick="loadMap()" class="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700">
+                        <i class="bi bi-folder-fill me-2"></i>Load
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                <!-- Tools Panel -->
+                <div class="lg:col-span-1 bg-white p-4 rounded-lg shadow">
+                    <h2 class="text-lg font-semibold mb-4">Tools</h2>
+                    
+                    <!-- Map Upload -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium mb-2">Import Floor Map</label>
+                        <input type="file" id="mapUpload" accept="image/*" class="w-full text-sm" onchange="handleMapUpload(event)">
+                    </div>
+
+                    <!-- Elements -->
+                    <div class="mb-6">
+                        <h3 class="text-sm font-medium mb-2">Elements</h3>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="draggable p-2 bg-gray-100 rounded text-center" draggable="true" data-type="shop">
+                                <i class="bi bi-shop text-xl"></i>
+                                <div class="text-xs">Shop</div>
+                            </div>
+                            <div class="draggable p-2 bg-gray-100 rounded text-center" draggable="true" data-type="room">
+                                <i class="bi bi-door-open text-xl"></i>
+                                <div class="text-xs">Room</div>
+                            </div>
+                            <div class="draggable p-2 bg-gray-100 rounded text-center" draggable="true" data-type="exit">
+                                <i class="bi bi-box-arrow-right text-xl"></i>
+                                <div class="text-xs">Exit</div>
+                            </div>
+                            <div class="draggable p-2 bg-gray-100 rounded text-center" draggable="true" data-type="info">
+                                <i class="bi bi-info-circle text-xl"></i>
+                                <div class="text-xs">Info</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Layers -->
+                    <div class="mb-6">
+                        <h3 class="text-sm font-medium mb-2">Layers</h3>
+                        <div id="layers" class="space-y-2">
+                            <!-- Layers will be added here dynamically -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Map Canvas -->
+                <div class="lg:col-span-3">
+                    <div class="relative bg-white rounded-lg shadow h-[600px] overflow-hidden">
+                        <div id="mapCanvas" class="map-canvas w-full h-full"></div>
+                        
+                        <!-- Map Controls -->
+                        <div class="absolute bottom-4 right-4 element-toolbar rounded-lg shadow p-2 space-x-2">
+                            <button onclick="zoomIn()" class="p-2 hover:bg-gray-100 rounded">
+                                <i class="bi bi-zoom-in"></i>
+                            </button>
+                            <button onclick="zoomOut()" class="p-2 hover:bg-gray-100 rounded">
+                                <i class="bi bi-zoom-out"></i>
+                            </button>
+                            <button onclick="resetView()" class="p-2 hover:bg-gray-100 rounded">
+                                <i class="bi bi-arrows-fullscreen"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let mapScale = 1;
+        let mapOffset = { x: 0, y: 0 };
+        let elements = [];
+        let isDragging = false;
+        let startPos = { x: 0, y: 0 };
+
+        const mapCanvas = document.getElementById('mapCanvas');
+
+        // Map Upload Handler
+        function handleMapUpload(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    mapCanvas.style.backgroundImage = `url(${e.target.result})`;
+                    mapCanvas.style.backgroundSize = 'contain';
+                    mapCanvas.style.backgroundRepeat = 'no-repeat';
+                    mapCanvas.style.backgroundPosition = 'center';
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        // Element Creation and Dragging
+        function createMapElement(type, x, y) {
+            const element = document.createElement('div');
+            element.className = 'absolute p-2 bg-white rounded-lg shadow cursor-move';
+            element.style.left = `${x}px`;
+            element.style.top = `${y}px`;
+            
+            const icon = document.createElement('i');
+            switch(type) {
+                case 'shop': icon.className = 'bi bi-shop'; break;
+                case 'room': icon.className = 'bi bi-door-open'; break;
+                case 'exit': icon.className = 'bi bi-box-arrow-right'; break;
+                case 'info': icon.className = 'bi bi-info-circle'; break;
+            }
+            
+            element.appendChild(icon);
+            element.dataset.type = type;
+            
+            // Make element draggable
+            element.addEventListener('mousedown', startDragging);
+            element.addEventListener('touchstart', startDragging, { passive: false });
+            
+            mapCanvas.appendChild(element);
+            elements.push(element);
+            
+            return element;
+        }
+
+        function startDragging(e) {
+            if (e.type === 'touchstart') e.preventDefault();
+            const touch = e.touches ? e.touches[0] : e;
+            isDragging = true;
+            const element = e.target.closest('div');
+            
+            startPos = {
+                x: touch.clientX - element.offsetLeft,
+                y: touch.clientY - element.offsetTop
+            };
+
+            const moveHandler = (moveEvent) => {
+                if (!isDragging) return;
+                const moveTouch = moveEvent.touches ? moveEvent.touches[0] : moveEvent;
+                
+                element.style.left = `${moveTouch.clientX - startPos.x}px`;
+                element.style.top = `${moveTouch.clientY - startPos.y}px`;
+            };
+
+            const endHandler = () => {
+                isDragging = false;
+                document.removeEventListener('mousemove', moveHandler);
+                document.removeEventListener('mouseup', endHandler);
+                document.removeEventListener('touchmove', moveHandler);
+                document.removeEventListener('touchend', endHandler);
+            };
+
+            document.addEventListener('mousemove', moveHandler);
+            document.addEventListener('mouseup', endHandler);
+            document.addEventListener('touchmove', moveHandler);
+            document.addEventListener('touchend', endHandler);
+        }
+
+        // Initialize Drag and Drop
+        document.querySelectorAll('.draggable').forEach(element => {
+            element.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData('text/plain', e.target.dataset.type);
+            });
+        });
+
+        mapCanvas.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        mapCanvas.addEventListener('drop', (e) => {
+            e.preventDefault();
+            const type = e.dataTransfer.getData('text/plain');
+            const rect = mapCanvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            createMapElement(type, x, y);
+        });
+
+        // Zoom Controls
+        function zoomIn() {
+            mapScale *= 1.2;
+            updateMapTransform();
+        }
+
+        function zoomOut() {
+            mapScale /= 1.2;
+            updateMapTransform();
+        }
+
+        function resetView() {
+            mapScale = 1;
+            mapOffset = { x: 0, y: 0 };
+            updateMapTransform();
+        }
+
+        function updateMapTransform() {
+            mapCanvas.style.transform = `scale(${mapScale}) translate(${mapOffset.x}px, ${mapOffset.y}px)`;
+        }
+
+        // Save and Load
+        function saveMap() {
+            const mapData = {
+                elements: elements.map(el => ({
+                    type: el.dataset.type,
+                    x: el.style.left,
+                    y: el.style.top
+                })),
+                backgroundImage: mapCanvas.style.backgroundImage
+            };
+            localStorage.setItem('indoorMap', JSON.stringify(mapData));
+            alert('Map saved successfully!');
+        }
+
+        function loadMap() {
+            const mapData = JSON.parse(localStorage.getItem('indoorMap'));
+            if (mapData) {
+                // Clear existing elements
+                elements.forEach(el => el.remove());
+                elements = [];
+                
+                // Restore background
+                mapCanvas.style.backgroundImage = mapData.backgroundImage;
+                
+                // Restore elements
+                mapData.elements.forEach(el => {
+                    const element = createMapElement(el.type, parseInt(el.x), parseInt(el.y));
+                    element.style.left = el.x;
+                    element.style.top = el.y;
+                });
+            }
+        }
+
+        // Initialize pan functionality
+        let isPanning = false;
+        let panStart = { x: 0, y: 0 };
+
+        mapCanvas.addEventListener('mousedown', (e) => {
+            if (e.target === mapCanvas) {
+                isPanning = true;
+                panStart = { x: e.clientX - mapOffset.x, y: e.clientY - mapOffset.y };
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isPanning) {
+                mapOffset.x = e.clientX - panStart.x;
+                mapOffset.y = e.clientY - panStart.y;
+                updateMapTransform();
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isPanning = false;
+        });
+    </script>
+<script>document.body.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); return }, { passive: false })</script>
+	</body>
+</html>
